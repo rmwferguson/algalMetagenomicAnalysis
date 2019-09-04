@@ -1,0 +1,90 @@
+## load packages
+```{r}
+library(ggplot2)
+library(MASS)
+theme_set(theme_bw())
+```
+
+## load data
+```{r}
+data <- read.csv("data.csv", head = T)
+
+col <- c("#e7298a", "#1b9e77", "#d95f02", "#7570b3")
+```
+
+```{r}
+P <- ggplot(data, aes(x = xline, y = cells, colour=SaltLevel))+
+  geom_boxplot(lwd=.8)+
+  # custom pallet and change order
+  #scale_colour_manual(values=col)+
+  ylim(0,4000000)+
+  scale_colour_discrete(name="Salinity", breaks=c("T0","Low","Medium","High"))+
+  scale_colour_manual(values=col)+
+  labs(y = expression(paste("Cells/cm"^"2")), x ="", title = "(a) Epibacterial abundance")+ # name axis
+  scale_x_discrete(labels=c("T0","T1","T2","T1","T2","T1","T2"))+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.position="none")+
+  #annotate("text", x = .7, y = 4000000, label = "a", size = 8)+
+  annotate("text", x = 2.5, y = 3700000, label = "Low", size = 4.5)+
+  annotate("text", x = 4.5, y = 3700000, label = "Medium", size = 4.5)+
+  annotate("text", x = 6.5, y = 3700000, label = "High", size = 4.5)+
+  annotate("segment", x = 1.6, xend = 3.4, y = 3500000, yend = 3500000, cex = .8)+
+  annotate("segment", x = 3.7, xend = 5.4, y = 3500000, yend = 3500000, cex = .8)+
+  annotate("segment", x = 5.7, xend = 7.4, y = 3500000, yend = 3500000, cex = .8)
+
+P
+```
+
+# global mod 
+```{r}
+data2 <- data[data$SaltLevel != "T0" ,] # remove T0 from data
+
+mod <- glm.nb(cells ~ test*Timepoint, data = data2)
+
+mod2 <- glm.nb(cells ~ test+Timepoint, data = data2)
+
+anova(mod, mod2) # interaction is significant
+
+anova(mod)
+```
+
+# Is med and low different? Or does it change over time?
+```{r}
+data1 <- data[data$SaltLevel != "T0" ,]
+data1 <- data1[data1$SaltLevel != "High" ,]
+
+mod <- glm.nb(cells ~ SaltLevel*Timepoint, data = data1)
+mod2 <- glm.nb(cells ~ SaltLevel+Timepoint, data = data1)
+mod3 <- glm.nb(cells ~ SaltLevel, data = data1)
+
+anova(mod, mod2) # interaction is not significant
+anova(mod2, mod3) # timepoint is signifiacnt
+
+anova(mod2)
+```
+
+# T1 between salt levels
+```{r}
+test3 <- data[data$Timepoint == "T1",]
+
+T3_mod <- glm.nb(cells ~ SaltLevel, data = test3)
+
+anova(T3_mod)
+```
+
+# Does High change significantly over time?
+```{r}
+High <- data[data$SaltLevel == "High" ,]
+
+high_mod <- glm.nb(cells ~ Timepoint, data = High)
+
+anova(high_mod)
+```
+
+# T2 between salt levels
+```{r}
+test2 <- data[data$Timepoint == "T2" ,]
+
+T2_mod <- glm.nb(cells ~ SaltLevel, data = test2)
+
+anova(T2_mod)
+```

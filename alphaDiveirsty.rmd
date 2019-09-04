@@ -1,0 +1,268 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+
+# load packages
+```{r}  
+library(phyloseq)
+library(ggplot2)
+library(FSA)
+library(vegan)
+
+theme_set(theme_classic())
+theme_set(theme_bw())
+
+col <- c("#e7298a", "#1b9e77", "#d95f02", "#7570b3")
+
+```
+
+## make data objects for phyloseq (OTU table are unique taxa only)
+```{r}
+#OTU table (matrix with no tax information)
+otu <- read.csv("OTUa.csv", head = T, row.names = 1)
+#MetaData table (row names must be sample names from OTU table)
+env <- read.csv("env.csv", head = T, row.names = 1)
+```
+
+## make into matrix
+```{r}
+otuMat <- as.matrix(otu)
+```
+
+##Convert to phyloseq objects and combine to make phyloseq object
+```{r}
+OTU <- otu_table(otuMat, taxa_are_rows = T)
+ENV <- sample_data(env)
+data <- phyloseq(OTU, ENV)
+#look at what you have
+data
+```
+
+#How many reads per sample
+```{r}
+sample_sums(data)
+```
+
+#remove sample S04, 46 and 47 as they have low numbers of reads get 45K per sample
+```{r}
+data = prune_samples(sample_sums(data)>=31318, data)
+
+data1 <- subset_samples(data, Month != "Sept") # remove september samples, not used
+data2 <- subset_samples(data1, salt_level != "S3R2 (BR)")
+
+dataRare <- rarefy_even_depth(data2, rngseed = 1121983) # rerefy data to even sampling depth
+
+sample_sums(dataRare)
+```
+
+#Alpha diveristy
+
+# remove tank walls data
+```{r}
+alpha <- subset_samples(dataRare, TimePoint != "TankWalls") 
+
+sample_sums(alpha)
+```
+
+#as a box plot
+```{r}
+#pdf("Figure1b.pdf", width = 5.5, height = 4)
+a <- plot_richness(alpha,  x="test2", color="treatment",measures=c("Observed"))+
+geom_boxplot()+  
+ labs(x ="", title = "(b) Species richness", y = "Number of taxa")+ # name axis
+  scale_x_discrete(labels=c("T0","T1","T2","T1","T2","T1","T2"))+
+  scale_color_manual(name="Salinity", values = col, breaks=c("T0","Low","Medium","High"))+ # custom pallet and change order
+  theme(axis.text.x=element_text(angle=0,hjust=.5))+
+ # theme(axis.text.x = element_text(angle=0), hjust=0.95)+ # change x axis angle
+  #axis.ticks = element_blank())+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), strip.text.x = element_blank())+
+  ylim(0,1500)+ 
+  annotate("text", x = 2.5, y = 1500, label = "Low", size = 4.5)+
+  annotate("text", x = 4.5, y = 1500, label = "Medium", size = 4.5)+
+  annotate("text", x = 6.5, y = 1500, label = "High", size = 4.5)+
+  annotate("segment", x = 1.6, xend = 3.4, y = 1430, yend = 1430, cex = .8)+
+  annotate("segment", x = 3.7, xend = 5.4, y = 1430, yend = 1430, cex = .8)+
+  annotate("segment", x = 5.7, xend = 7.4, y = 1430, yend = 1430, cex = .8)
+
+a
+```
+
+#export code
+```{r}
+pdf("Alpha Div.pdf", width = 6.65354331, height = 3.326771655)
+
+postscript("Alpha Div.eps", width = 6.65354331, height = 3.326771655,  paper = "special",  horizontal=F)
+
+dev.off()
+```
+
+#Kruskal-Wallis test 
+
+#GET DATA FOR TEST (load CSV with diveristy data for each sample, calculated with estimate_richness() in phyloseq)
+```{R}
+richness <- read.csv("richA.csv", head = T)
+richness
+```
+
+#effect of salt T1, with DunnTest for posthoc (richness = species richness, shannon = shannon diveirsty)
+```{r}
+test1 <- richness[richness$TimePoint == "T1" ,] # get time point 1 data
+
+rich_saltLevel <- kruskal.test(Observed ~ treatment, data = test1)
+
+rich_saltLevel
+
+#Kruskal-Wallis chi-squared = 9.9257, df = 2, p-value = 0.006993
+
+
+rich_saltLevel_Post = dunnTest(Observed ~ treatment,
+              data=test1,
+              method="bh")     
+
+rich_saltLevel_Post 
+
+#1    high - low -3.0289607 0.002453966 0.007361897
+#2 high - medium -2.1921939 0.028365506 0.042548258
+#3  low - medium  0.9621405 0.335979047 0.335979047
+```
+
+
+#effect of salt T2, with DunnTest for posthoc
+```{r}
+test2 <- richness[richness$TimePoint == "T2" ,] # Get T2 data only
+
+rich_saltLevel <- kruskal.test(Observed ~ treatment, data = test2)
+
+rich_saltLevel
+
+#Kruskal-Wallis chi-squared = 5.9154, df = 2, p-value = 0.05194
+
+
+rich_saltLevel_Post = dunnTest(Observed ~ treatment,
+              data=test1,
+              method="bh")     
+
+rich_saltLevel_Post 
+
+#    high - low -3.0289607 0.002453966 0.007361897
+# high - medium -2.1921939 0.028365506 0.042548258*
+#  low - medium  0.9621405 0.335979047 0.335979047
+```
+
+
+#Low salt by time
+```{r}
+test2 <- richness[richness$treatment == "low",] # get low salt data only
+
+test2a <- richness[richness$treatment == "low" | richness$TimePoint =="T0",] # Get T0 and low salt
+test2a <- test2a[test2a$TimePoint =="T0" | test2a$TimePoint =="T1",] # Remove T2
+
+test2b <- richness[richness$treatment == "low" | richness$TimePoint =="T0",] # Get T0 and low salt
+test2b <- test2b[test2a$TimePoint =="T0" | test2b$TimePoint =="T2",] # Remove T1
+```
+
+
+```{r}
+#T1 v T2
+
+rich_low <- kruskal.test(Observed ~ TimePoint, data = test2)
+
+rich_low
+
+#Kruskal-Wallis chi-squared = 6, df = 1, p-value = 0.01431
+
+#T0 v T1
+
+rich_lowa <- kruskal.test(Observed ~ TimePoint, data = test2a)
+
+rich_lowa
+
+#Kruskal-Wallis chi-squared = 4.5, df = 1, p-value = 0.03389 *
+
+#T0 v T2
+
+rich_lowb <- kruskal.test(Observed ~ TimePoint, data = test2b)
+
+rich_lowb
+
+#Kruskal-Wallis chi-squared = 4.5, df = 1, p-value = 0.03389 *
+```
+
+#med salt overtime
+```{r}
+test3 <- richness[richness$treatment == "medium",]
+
+test3a <- richness[richness$treatment == "medium" | richness$TimePoint =="T0",]
+test3a <- test3a[test3a$TimePoint =="T0" | test3a$TimePoint =="T1",]
+
+
+test3b <- richness[richness$treatment == "medium" | richness$TimePoint =="T0",]
+test3b <- test3b[test3a$TimePoint =="T0" | test3b$TimePoint =="T2",]
+
+#T1 v T2
+
+rich_med <- kruskal.test(Observed ~ TimePoint, data = test3)
+
+rich_med
+
+#Kruskal-Wallis chi-squared = 6.8182, df = 1, p-value = 0.009023
+
+
+
+#T0 v T1
+
+rich_lowa <- kruskal.test(Observed ~ TimePoint, data = test3a)
+
+rich_lowa
+
+#Kruskal-Wallis chi-squared = 5, df = 1, p-value = 0.02535
+
+
+#T0 v T2
+
+rich_lowb <- kruskal.test(Observed ~ TimePoint, data = test3b)
+
+rich_lowb
+
+#Kruskal-Wallis chi-squared = 5, df = 1, p-value = 0.02535
+```
+
+
+#High salt overtime
+```{r}
+test4 <- richness[richness$treatment == "high",]
+
+test4a <- richness[richness$treatment == "high" | richness$TimePoint =="T0",]
+test4a <- test4a[test4a$TimePoint =="T0" | test4a$TimePoint =="T1",]
+
+
+test4b <- richness[richness$treatment == "high" | richness$TimePoint =="T0",]
+test4b <- test4b[test4a$TimePoint =="T0" | test4b$TimePoint =="T2",]
+
+#T1 v T2
+
+rich_high <- kruskal.test(Observed ~ TimePoint, data = test4)
+
+rich_high
+
+#Kruskal-Wallis chi-squared = 3.75, df = 1, p-value = 0.05281
+
+
+#T0 v T1
+
+rich_lowa <- kruskal.test(Observed ~ TimePoint, data = test4a)
+
+rich_lowa
+
+#Kruskal-Wallis chi-squared = 5, df = 1, p-value = 0.02535
+
+#T0 v T2
+
+rich_lowb <- kruskal.test(Observed ~ TimePoint, data = test4b)
+
+rich_lowb
+
+#Kruskal-Wallis chi-squared = 1.3333, df = 1, p-value = 0.2482
+```

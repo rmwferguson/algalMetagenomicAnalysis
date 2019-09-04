@@ -1,0 +1,184 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+
+# load packages
+```{r}  
+library(phyloseq)
+library(ggplot2)
+library(vegan)
+library(DESeq2)
+
+theme_set(theme_classic())
+theme_set(theme_bw())
+
+col <- c("#e7298a", "#1b9e77", "#d95f02", "#7570b3")
+
+```
+
+## make data objects for phyloseq
+```{r}
+#OTU table (matrix with no tax information)
+otu <- read.csv("otu.csv", head = T, row.names = 1)
+#Tax table (with OTU IDs that match OTU table and no duplicates)
+tax <- read.csv("tax.csv", head = T, row.names = 1)
+#MetaData table (row names must be sample names from OTU table)
+env <- read.csv("env.csv", head = T, row.names = 1)
+```
+
+## make into matrix
+```{r}
+otuMat <- as.matrix(otu)
+taxMat <- as.matrix(tax)
+```
+
+##Convert to phyloseq objects and combine to make phyloseq object
+```{r}
+OTU <- otu_table(otuMat, taxa_are_rows = T)
+TAX <- tax_table(taxMat)
+ENV <- sample_data(env)
+data <- phyloseq(OTU, TAX, ENV)
+#look at what you have
+data
+```
+
+#How many reads per sample
+```{r}
+sample_sums(data)
+```
+
+#remove sample S04, 46 and 47 as they have low numbers (they are tank walls and day 1 which are not used)
+```{r}
+data = prune_samples(sample_sums(data)>=16000, data)
+
+data1 <- subset_samples(data, Month != "Sept") # remove september samples, not used
+data2 <- subset_samples(data1, salt_level != "S3R2 (BR)") # unsued duplicate
+
+dataRare <- rarefy_even_depth(data2, rngseed = 1121983) # rerefy data to even sampling depth
+
+sample_sums(dataRare)
+```
+
+# MDS make presance absance distance matrix for NMDS
+```{R}
+ord <- ordinate(dataRare, "NMDS", "jaccard", binary = TRUE) # make the distance matrix and ordination
+```
+
+```{r}
+plot_ordination(dataRare, ord, type="samples", color="treatment", shape="TimePoint")+ # plots the ordination
+  scale_color_manual(name="Salinity", values = col, breaks=c("T0","Low","Medium","High"))+ # custom pallet and change order
+  scale_shape_discrete(name="Time Point")+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  geom_point(size=3.5)
+```
+
+# Permanova to test effect of salt level and time (striped out GV and tank walls)
+```{r}
+salt.month <- subset_samples(dataRare, TimePoint != "T0") # just get the comparible samples
+salt.month <- subset_samples(salt.month, TimePoint != "TankWalls") # rmove tank walls
+
+distanceMatrix.salt.month <- phyloseq::distance(salt.month, method = "jaccard", binary = T) # make a distance matrix
+
+envirodata.salt.month <- data.frame(sample_data(salt.month)) # data frame of your enviro vars
+otudata.salt.month <- data.frame(otu_table(salt.month)) # data frame of your OTUs
+otudata.salt.month <- t(otudata.salt.month) # traspose your data frame so you can run this data in vegan
+
+adonis(distanceMatrix.salt.month ~ salt + TimePoint, data = envirodata.salt.month) # run the modle
+```
+
+# tank walls, are they different to algae? 
+# not the one, check that algae biofild is sig dif to tank wall
+# PERMANOVA tank wall v algae
+# Significant difference between bacteria for tank wall v algae, but not as important as the salt level. 
+```{r}
+biofilm <- subset_samples(dataRare, Month == "Oct") # just get the comparible samples
+
+distanceMatrix.biofilm <- phyloseq::distance(biofilm, method = "jaccard", binary = T) # make a distance matrix
+
+envirodata.biofilm <- data.frame(sample_data(biofilm)) # data frame of your enviro vars
+otudata.biofilm <- data.frame(otu_table(biofilm)) # data frame of your OTUs
+otudata.biofilm <- t(otudata.biofilm) # traspose your data frame so you can run this data in vegan
+
+adonis(distanceMatrix.biofilm ~ salt * origin, data = envirodata.biofilm) # run the modle
+```
+
+# differential_abundance with deseq2
+# get data and calculate the model
+```{r}
+#get samples for comparison, not normalized
+
+alt.month <- subset_samples(data, TimePoint != "TankWalls") # rmove tank walls
+alt.month <- subset_samples(alt.month, treatment != "T0") # remove time 0
+alt.month <- subset_taxa(alt.month, superkingdom!="") # filter out uncalisfyed Contigs
+filtS <- subset_taxa(alt.month, superkingdom=="Bacteria") # keep bacteria
+shortData <- prune_taxa(names(sort(taxa_sums(filtS),TRUE)[1:200]), filtS) # select top dominant taxa
+
+sample_data(shortData) # check data
+
+diff <- phyloseq_to_deseq2(shortData, ~ TimePoint + treatment) 
+
+gm_mean <- function(x, na.rm=TRUE){
+  exp(sum(log(x[x > 0]), na.rm=na.rm) / length(x))
+}
+geoMeans = apply(counts(diff), 1, gm_mean)
+diff = estimateSizeFactors(diff, geoMeans = geoMeans)
+diffRes = DESeq(diff, fitType="local")
+
+save(diffRes, file="diff.RData") # save the data for table
+```
+
+#Results table and data to plot for selected comparison (medium v high)
+```{r}
+res = results(diffRes)
+res = res[order(res$padj, na.last=NA), ]
+alpha = 0.01 # p value = 99%
+sigtab = res[(res$padj < alpha), ]
+sigtab = cbind(as(sigtab, "data.frame"), as(tax_table(dataRare)[rownames(sigtab), ], "matrix"))
+head(sigtab)
+
+posigtab = sigtab[sigtab[, "log2FoldChange"] > 0, ]
+posigtab = posigtab[, c("baseMean", "log2FoldChange", "lfcSE", "padj", "phylum", "class", "family", "genus")]
+
+head <- posigtab
+
+write.csv(sigtab, "HighVMed.csv") # save data for table
+```
+
+#Plot results
+```{r}
+library("ggplot2")
+theme_set(theme_bw())
+sigtabgen = subset(sigtab, !is.na(genus)) # set genera level
+
+# make color pallete 
+
+library("RColorBrewer") 
+getPalette <- colorRampPalette(brewer.pal(9, "Set1"))
+speciesList <-  sigtabgen$class
+speciesPalette <- getPalette(length(speciesList)) # make a pallete this long
+names(speciesPalette) = speciesList  # lists what the matches will be.
+
+speciesPalette <- gsub("#CA2832","Pink", speciesPalette) # edit the species pallet to have better contrast bettween conditions.
+
+pdf("FigureS1.pdf", width = 7, height = 5)
+
+x = tapply(sigtabgen$log2FoldChange, sigtabgen$genus, function(x) max(x))
+x = sort(x, TRUE)
+sigtabgen$genus = factor(as.character(sigtabgen$genus), levels=names(x))
+# family order
+x = tapply(sigtabgen$log2FoldChange, sigtabgen$genus, function(x) max(x))
+x = sort(x, TRUE)
+sigtabgen$genus = factor(as.character(sigtabgen$genus), levels=names(x))
+
+ggplot(sigtabgen, aes(y=genus, x=log2FoldChange, color=class)) + 
+  geom_point(size=3) + 
+  geom_vline(xintercept = 0.0, color = "gray", size = 0.5) +
+  scale_color_manual(values=speciesPalette)+
+  annotate("text", x = -12, y = 32, label = "High salinity", size = 3)+
+  annotate("text", x = +8.5, y = 32, label = "Medium salinity", size = 3)+
+  theme(axis.text.x = element_text(angle = -90, hjust = 0, vjust=0.5), panel.grid.major = element_blank(),  panel.grid.minor = element_blank() )
+
+dev.off
+```
